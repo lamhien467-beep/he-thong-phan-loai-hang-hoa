@@ -1,0 +1,129 @@
+board: MKS-DLC32 V2.2
+
+stepping:
+  engine: I2S_STATIC
+  idle_ms: 255
+  pulse_us: 4
+  dir_delay_us: 1
+  disable_delay_us: 0
+
+axes:
+  shared_stepper_disable_pin: I2SO.0
+
+  x:
+    steps_per_mm: 100
+    max_rate_mm_per_min: 5000
+    acceleration_mm_per_sec2: 500
+    max_travel_mm: 1000
+
+    homing:
+      cycle: 2
+      allow_single_axis: true
+      positive_direction: false
+      mpos_mm: 0
+      feed_mm_per_min: 200
+      seek_mm_per_min: 1000
+      settle_ms: 500
+      seek_scaler: 1.1
+      feed_scaler: 1.1
+
+    motor0:
+      limit_neg_pin: gpio.36:low
+      hard_limits: true
+      pulloff_mm: 5
+      stepstick:
+        step_pin: I2SO.1
+        direction_pin: I2SO.2
+
+  y:
+    steps_per_mm: 100
+    max_rate_mm_per_min: 5000
+    acceleration_mm_per_sec2: 500
+    max_travel_mm: 1000
+
+    homing:
+      cycle: 2
+      allow_single_axis: true
+      positive_direction:false 
+      mpos_mm: 0
+      feed_mm_per_min: 200
+      seek_mm_per_min: 900
+      settle_ms: 500
+      seek_scaler: 1.1
+      feed_scaler: 1.1
+
+    motor0:
+      limit_pos_pin: gpio.35:low
+      hard_limits: true
+      pulloff_mm: 5
+      stepstick:
+        step_pin: I2SO.5
+        direction_pin: I2SO.6
+
+  z:
+    steps_per_mm: 100
+    max_rate_mm_per_min: 5000
+    acceleration_mm_per_sec2: 500
+    max_travel_mm: 1000
+
+    idle_disable: false
+
+    homing:
+      cycle: 1
+      allow_single_axis: true
+      positive_direction: true
+      mpos_mm: 0
+      feed_mm_per_min: 200
+      seek_mm_per_min: 1000
+      settle_ms: 500
+      seek_scaler: 1.1
+      feed_scaler: 1.1
+
+    motor0:
+      limit_pos_pin: gpio.34:low
+      hard_limits: false
+      pulloff_mm: 5
+      stepstick:
+        step_pin: I2SO.3
+        direction_pin: I2SO.4
+
+i2so:
+  bck_pin: gpio.16
+  data_pin: gpio.21
+  ws_pin: gpio.17
+
+probe:
+  pin: gpio.22:low
+
+PWM:
+  pwm_hz: 50
+  output_pin: gpio.32
+  enable_pin: NO_PIN
+  direction_pin: NO_PIN
+  disable_with_s0: false
+  s0_with_disable: false
+  spinup_ms: 0
+  spindown_ms: 0
+  tool_num: 0
+  speed_map: 0=2.5% 1000=12.5%
+
+control:
+  safety_door_pin: NO_PIN
+  reset_pin: NO_PIN
+  feed_hold_pin: NO_PIN
+  cycle_start_pin: NO_PIN
+  macro0_pin: NO_PIN
+  macro1_pin: NO_PIN
+  macro2_pin: NO_PIN
+  macro3_pin: NO_PIN
+
+macros:
+  startup_line0:
+  startup_line1:
+  macro0:
+  macro1:
+  macro2:
+  macro3:
+
+start:
+  must_home: false
