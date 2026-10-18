@@ -1,8 +1,12 @@
+import os
 import sys
 import cv2
 import serial
 import time
+import numpy as np
+from datetime import datetime
 
+from openpyxl import Workbook, load_workbook
 from pyzbar.pyzbar import decode, ZBarSymbol
 from PySide6.QtWidgets import *
 from PySide6.QtCore import Qt, QTimer
@@ -19,37 +23,55 @@ BAUD_RATE = 115200
 ARDUINO_PORT = "COM10"
 ARDUINO_BAUD = 115200
 
+# Toc do chay on dinh cua bang tai (0..255, PWM that cua L298N)
+BANG_TAI_TOC_DO = 200
+
 CHE_DO_MO_PHONG = False
 CAMERA_INDEX = 1
 
-# Luu y: neu servo khong quay dung, kiem tra cau hinh spindle trong FluidNC
-# (max_speed_map, disable_with_s0). S0 co the bi hieu la TAT spindle.
-SERVO_MO = "M3 S0"
-SERVO_KHOA = "M3 S450"
+# Thu muc luu nhat ky (doi thanh duong dan day du neu muon, vd r"D:\KHO\NhatKy")
+THU_MUC_EXCEL = r"D:\New folder\New folder03\NhatKy_luukho"
 
-# Thoi gian cho servo dong/mo xong (giay)
-THOI_GIAN_SERVO = 0.8
+# Moi lan chay chuong trinh tao 1 file moi, ten theo ngay gio luc khoi dong
+FILE_EXCEL = os.path.join(
+    THU_MUC_EXCEL,
+    "nhat_ky_kho_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".xlsx"
+)
+
+SERVO_MO = "M3 S0"
+SERVO_KHOA_TO = "M3 S320"     # hang to  (O_1..O_6)
+SERVO_KHOA_NHO = "M3 S440"    # hang nho (O_7..O_12)
+
+# Toc do di chuyen (mm/phut) - neu bi mat buoc thi GIAM cac so nay
+F_XY = 1500                   # di chuyen ngang X, Y
+F_Z_LEN = 1000                # nang Z len
+F_Z_XUONG = 1000              # ha Z xuong de gap / cat
+
+# Toc do ha hang
+F_HA_NHANH = 1500
+F_HA_CHAM = 600
+KHOANG_CHAM = 25              # mm cuoi cung ha cham
 
 TRAM_GAP = {
     "X": 0,
-    "Y": 400,
+    "Y": 375,
     "Z_TREN": 0,
-    "Z_GAP": -68,
+    "Z_GAP": -56,
 }
 
 KHO = {
-    "O_1":  {"X": 150, "Y": 410, "Z_GAP": -118, "trang_thai": 0},
-    "O_2":  {"X": 220, "Y": 410, "Z_GAP": -120, "trang_thai": 0},
-    "O_3":  {"X": 280, "Y": 410, "Z_GAP": -120, "trang_thai": 0},
-    "O_4":  {"X": 280, "Y": 350, "Z_GAP": -120, "trang_thai": 0},
-    "O_5":  {"X": 213, "Y": 350, "Z_GAP": -120, "trang_thai": 0},
-    "O_6":  {"X": 153, "Y": 350, "Z_GAP": -120, "trang_thai": 0},
-    "O_7":  {"X": 169, "Y": 288, "Z_GAP": -120, "trang_thai": 0},
-    "O_8":  {"X": 214, "Y": 288, "Z_GAP": -118, "trang_thai": 0},
-    "O_9":  {"X": 261, "Y": 288, "Z_GAP": -120, "trang_thai": 0},
-    "O_10": {"X": 261, "Y": 248, "Z_GAP": -120, "trang_thai": 0},
-    "O_11": {"X": 218, "Y": 248, "Z_GAP": -120, "trang_thai": 0},
-    "O_12": {"X": 172, "Y": 248, "Z_GAP": -120, "trang_thai": 0},
+    "O_1":  {"X": 137, "Y": 430, "Z_GAP": -116, "trang_thai": 0, "ten_hang": ""},
+    "O_2":  {"X": 203, "Y": 430, "Z_GAP": -116, "trang_thai": 0, "ten_hang": ""},
+    "O_3":  {"X": 273, "Y": 430, "Z_GAP": -116, "trang_thai": 0, "ten_hang": ""},
+    "O_4":  {"X": 273, "Y": 354, "Z_GAP": -116, "trang_thai": 0, "ten_hang": ""},
+    "O_5":  {"X": 203, "Y": 354, "Z_GAP": -116, "trang_thai": 0, "ten_hang": ""},
+    "O_6":  {"X": 137, "Y": 354, "Z_GAP": -116, "trang_thai": 0, "ten_hang": ""},
+    "O_7":  {"X": 135, "Y": 295, "Z_GAP": -114, "trang_thai": 0, "ten_hang": ""},
+    "O_8":  {"X": 180, "Y": 295, "Z_GAP": -114, "trang_thai": 0, "ten_hang": ""},
+    "O_9":  {"X": 225, "Y": 295, "Z_GAP": -114, "trang_thai": 0, "ten_hang": ""},
+    "O_10": {"X": 225, "Y": 244, "Z_GAP": -114, "trang_thai": 0, "ten_hang": ""},
+    "O_11": {"X": 175, "Y": 244, "Z_GAP": -114, "trang_thai": 0, "ten_hang": ""},
+    "O_12": {"X": 135, "Y": 244, "Z_GAP": -114, "trang_thai": 0, "ten_hang": ""},
 }
 
 O_XUAT = {
@@ -57,6 +79,94 @@ O_XUAT = {
     "Y": 138,
     "Z_GAP": -120,
 }
+
+
+def servo_khoa_theo_loai(loai_hang):
+    """Chon lenh kep theo loai hang: TO hoac NHO."""
+    return SERVO_KHOA_TO if loai_hang == "TO" else SERVO_KHOA_NHO
+
+
+def servo_khoa_theo_o(ten_o):
+    """Chon lenh kep theo so o: O_1..O_6 la hang to, O_7..O_12 la hang nho."""
+    so_o = int(ten_o.replace("O_", ""))
+    return SERVO_KHOA_TO if so_o <= 6 else SERVO_KHOA_NHO
+
+
+# ==================================================
+# GHI NHAT KY EXCEL
+# ==================================================
+
+# Cac dong chua ghi duoc (vd file Excel dang mo) - se ghi bu o lan sau
+HANG_CHO_GHI = []
+
+
+def ten_hien_thi(noi_dung_qr):
+    """Doi noi dung QR thanh ten mat hang de ghi vao Excel."""
+    if "HAT GIONG" in noi_dung_qr:
+        return "Hạt giống"
+    if "GAO" in noi_dung_qr:
+        return "Gạo"
+    return noi_dung_qr
+
+
+def tao_file_excel():
+    """Tao file Excel moi (kem tieu de cot) ngay khi khoi dong chuong trinh."""
+    try:
+        os.makedirs(THU_MUC_EXCEL, exist_ok=True)
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "NhatKy"
+        ws.append(["Ngày", "Giờ", "Ô lưu", "Tên mặt hàng", "Hành động"])
+        for cot, rong in zip("ABCDE", (14, 12, 10, 30, 14)):
+            ws.column_dimensions[cot].width = rong
+        wb.save(FILE_EXCEL)
+        print("Da tao file nhat ky:", os.path.abspath(FILE_EXCEL))
+        return True
+    except Exception as e:
+        print("Khong tao duoc file Excel:", e)
+        return False
+
+
+def ghi_excel(ten_o, ten_hang, hanh_dong):
+    """Ghi 1 dong: Ngay, Gio, O luu, Ten mat hang, Hanh dong (NHAP/XUAT).
+    Neu file dang bi mo (khoa) thi giu dong lai va ghi bu o lan sau."""
+    bay_gio = datetime.now()
+    HANG_CHO_GHI.append([
+        bay_gio.strftime("%d/%m/%Y"),
+        bay_gio.strftime("%H:%M:%S"),
+        ten_o.replace("_", " "),          # O_1 -> O 1
+        ten_hang,
+        hanh_dong,
+    ])
+
+    try:
+        if os.path.exists(FILE_EXCEL):
+            wb = load_workbook(FILE_EXCEL)
+            ws = wb.active
+        else:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "NhatKy"
+            ws.append(["Ngày", "Giờ", "Ô lưu", "Tên mặt hàng", "Hành động"])
+            for cot, rong in zip("ABCDE", (14, 12, 10, 30, 14)):
+                ws.column_dimensions[cot].width = rong
+
+        for dong in HANG_CHO_GHI:
+            ws.append(dong)
+        wb.save(FILE_EXCEL)
+
+        print(f"Da ghi Excel: {ten_o} - {ten_hang} - {hanh_dong}")
+        HANG_CHO_GHI.clear()
+        return True
+
+    except PermissionError:
+        print(
+            f"Khong ghi duoc Excel - hay DONG file {FILE_EXCEL}! "
+            f"({len(HANG_CHO_GHI)} dong dang cho, se ghi bu lan sau)"
+        )
+    except Exception as e:
+        print("Loi ghi Excel:", e)
+    return False
 
 
 # ==================================================
@@ -105,6 +215,10 @@ def cap_nhat_led_o(ten_o, co_hang):
 
 
 def dieu_khien_bang_tai(chay):
+    # Gui toc do truoc moi lan START de Arduino luon chay dung toc do cai dat
+    if chay:
+        gui_arduino(f"SPEED={BANG_TAI_TOC_DO}")
+
     return gui_arduino("START" if chay else "STOP")
 
 
@@ -171,8 +285,25 @@ def send_gcode(cmd, timeout=5.0):
     return False
 
 
+VI_TRI = {"loai": "", "x": None, "y": None, "z": None}
+
+
+def luu_vi_tri(line):
+    """Tach MPos/WPos trong bao cao trang thai FluidNC de hien len giao dien."""
+    try:
+        for f in line[1:-1].split("|"):
+            if f.startswith("MPos:") or f.startswith("WPos:"):
+                v = f[5:].split(",")
+                VI_TRI["loai"] = f[:4]
+                VI_TRI["x"], VI_TRI["y"], VI_TRI["z"] = (
+                    float(v[0]), float(v[1]), float(v[2])
+                )
+    except Exception:
+        pass
+
+
 def doc_trang_thai():
-    """Hoi FluidNC bang '?' va tra ve trang thai: 'Idle', 'Run', 'Alarm'...
+    """Hoi FluidNC bang '?' va tra ve trang thai: 'Idle', 'Run', 'Hold', 'Alarm'...
     Tra ve None neu khong doc duoc."""
     if CHE_DO_MO_PHONG or fluidnc is None or not fluidnc.is_open:
         return None
@@ -189,6 +320,7 @@ def doc_trang_thai():
             ).strip()
 
             if line.startswith("<") and line.endswith(">"):
+                luu_vi_tri(line)
                 return line[1:-1].split("|")[0].split(":")[0]
     except Exception as e:
         print("Loi doc trang thai FluidNC:", e)
@@ -234,6 +366,7 @@ def doc_cam_bien_quang():
             ).strip()
 
             if line.startswith("<") and line.endswith(">"):
+                luu_vi_tri(line)
                 fields = line[1:-1].split("|")
                 for field in fields:
                     if field.startswith("Pn:"):
@@ -250,58 +383,104 @@ def doc_cam_bien_quang():
 # ==================================================
 
 def home():
-    # $H co the chay lau hon 5 giay nen cho timeout dai
+    # $H co the chay lau nen cho timeout dai
     if not send_gcode("$H", timeout=60):
         return False
     return cho_dung_yen(60)
 
 
 def tram_gap():
-    if not send_gcode(f"G0 Z{TRAM_GAP['Z_TREN']} F3000"):
+    if not send_gcode(f"G0 Z{TRAM_GAP['Z_TREN']} F{F_Z_LEN}"):
         return False
-    if not send_gcode(f"G0 X{TRAM_GAP['X']} Y{TRAM_GAP['Y']} F3000"):
-        return False
-    return cho_dung_yen()
-
-
-def gap():
-    if not send_gcode(f"G1 Z{TRAM_GAP['Z_GAP']} F3000"):
-        return False
-
-    # Cho Z xuong toi noi roi moi kep
-    if not cho_dung_yen():
-        return False
-
-    if not send_gcode(SERVO_KHOA):
-        return False
-
-    time.sleep(THOI_GIAN_SERVO)
-    if not send_gcode(f"G0 Z{TRAM_GAP['Z_TREN']} F3000"):
+    if not send_gcode(f"G0 X{TRAM_GAP['X']} Y{TRAM_GAP['Y']} F{F_XY}"):
         return False
     return cho_dung_yen()
+
+
+def phuc_hoi_may():
+    """Tu phuc hoi sau loi/STOP: go Hold hoac Alarm nhe, nang Z, mo servo.
+    KHONG chay ra tram gap (chi ra tram gap khi co hang moi trong nhan_hang()).
+    Tra ve False neu may van Alarm (mat vi tri) -> luc do moi can bam HOME."""
+    if CHE_DO_MO_PHONG:
+        return True
+
+    state = doc_trang_thai()
+
+    if state is None:
+        print("Khong doc duoc trang thai FluidNC")
+        return False
+
+    if state.startswith("Hold"):
+        try:
+            fluidnc.write(b"~")          # tiep tuc sau Feed Hold
+            fluidnc.flush()
+        except Exception as e:
+            print("Loi gui Resume:", e)
+            return False
+        time.sleep(0.2)
+
+    elif state == "Alarm":
+        send_gcode("$X")                 # mo khoa Alarm, khong home
+        time.sleep(0.2)
+        if doc_trang_thai() == "Alarm":
+            print("Van Alarm - can bam HOME")
+            return False
+
+    if not cho_dung_yen(10):
+        return False
+
+    # Nang Z len truoc roi moi mo servo
+    if not send_gcode(f"G0 Z{TRAM_GAP['Z_TREN']} F{F_Z_LEN}"):
+        return False
+    if not cho_dung_yen(10):
+        return False
+
+    if not send_gcode(SERVO_MO):         # nha kep de lan sau gap duoc
+        return False
+    time.sleep(0.3)
+
+    return True
 
 
 def den(x, y):
-    if not send_gcode(f"G0 Z{TRAM_GAP['Z_TREN']} F2000"):
+    if not send_gcode(f"G0 Z{TRAM_GAP['Z_TREN']} F{F_Z_LEN}"):
         return False
-    if not send_gcode(f"G0 X{x} Y{y} F3000"):
+    if not send_gcode(f"G0 X{x} Y{y} F{F_XY}"):
         return False
     return cho_dung_yen()
 
 
-def tha(z):
-    if not send_gcode(f"G1 Z{z} F3000"):
+def gap(lenh_khoa):
+    if not send_gcode(f"G1 Z{TRAM_GAP['Z_GAP']} F{F_Z_XUONG}"):
+        return False
+    if not cho_dung_yen():
+        return False
+    if not send_gcode(lenh_khoa):
+        return False
+    time.sleep(0.8)          # cho servo kep chat
+    if not send_gcode(f"G0 Z{TRAM_GAP['Z_TREN']} F{F_Z_LEN}"):
+        return False
+    return cho_dung_yen()
+
+
+def tha(z, lenh_khoa=None):
+    """Ha hang xuong do cao z roi nha.
+    Gui lai lenh kep truoc khi ha, ha nhanh den gan roi ha cham doan cuoi."""
+    if lenh_khoa and not send_gcode(lenh_khoa):
         return False
 
-    # Cho Z xuong toi noi roi moi nha
+    z_gan = min(z + KHOANG_CHAM, TRAM_GAP["Z_TREN"])
+    if not send_gcode(f"G1 Z{z_gan} F{F_HA_NHANH}"):
+        return False
+    if not send_gcode(f"G1 Z{z} F{F_HA_CHAM}"):
+        return False
     if not cho_dung_yen():
         return False
 
     if not send_gcode(SERVO_MO):
         return False
-
-    time.sleep(THOI_GIAN_SERVO)
-    if not send_gcode(f"G0 Z{TRAM_GAP['Z_TREN']} F1000"):
+    time.sleep(0.8)
+    if not send_gcode(f"G0 Z{TRAM_GAP['Z_TREN']} F{F_Z_LEN}"):
         return False
     return cho_dung_yen()
 
@@ -323,7 +502,7 @@ def o_trong(loai_hang):
 
 
 def nhan_hang(data):
-    """Nhan dien QR, gap hang va cat vao o phu hop."""
+    """Nhan dien QR, chay ra tram gap, gap hang va cat vao o phu hop."""
     if "HAT GIONG" in data:
         loai_hang = "TO"
     elif "GAO" in data:
@@ -339,17 +518,22 @@ def nhan_hang(data):
 
     print(f"Nhan {loai_hang} -> {ten}")
 
-    if not tram_gap() or not gap():
+    lenh_khoa = servo_khoa_theo_loai(loai_hang)
+
+    # Co hang moi moi chay ra tram gap (may dang dung yen o home)
+    if not tram_gap() or not gap(lenh_khoa):
         return False
 
     o = KHO[ten]
     if not den(o["X"], o["Y"]):
         return False
-    if not tha(o["Z_GAP"]):
+    if not tha(o["Z_GAP"], lenh_khoa):
         return False
 
     o["trang_thai"] = 1
+    o["ten_hang"] = ten_hien_thi(data.strip())      # nho ten hang cua o nay
     cap_nhat_led_o(ten, True)
+    ghi_excel(ten, o["ten_hang"], "NHẬP")
 
     if not tram_gap():
         return False
@@ -369,30 +553,33 @@ def xuat_mot_o(ten_o):
 
     print("Dang xuat:", ten_o)
 
+    lenh_khoa = servo_khoa_theo_o(ten_o)
+
     if not den(o["X"], o["Y"]):
         return False
-    if not send_gcode(f"G1 Z{o['Z_GAP']} F3000"):
+    if not send_gcode(f"G1 Z{o['Z_GAP']} F{F_Z_XUONG}"):
         return False
-
-    # Cho Z xuong toi noi roi moi kep
     if not cho_dung_yen():
         return False
 
-    if not send_gcode(SERVO_KHOA):
+    if not send_gcode(lenh_khoa):
         return False
 
-    time.sleep(THOI_GIAN_SERVO)
-    if not send_gcode(f"G0 Z{TRAM_GAP['Z_TREN']} F3000"):
+    time.sleep(0.8)
+    if not send_gcode(f"G0 Z{TRAM_GAP['Z_TREN']} F{F_Z_LEN}"):
         return False
     if not cho_dung_yen():
         return False
     if not den(O_XUAT["X"], O_XUAT["Y"]):
         return False
-    if not tha(O_XUAT["Z_GAP"]):
+    if not tha(O_XUAT["Z_GAP"], lenh_khoa):
         return False
 
+    ten_hang = o.get("ten_hang", "")
     o["trang_thai"] = 0
+    o["ten_hang"] = ""
     cap_nhat_led_o(ten_o, False)
+    ghi_excel(ten_o, ten_hang, "XUẤT")
     return tram_gap()
 
 
@@ -414,6 +601,45 @@ def xuat_hang():
     tram_gap()
     print("DA XUAT HET HANG")
     return True
+
+
+# ==================================================
+# VE KHUNG QR LEN HINH CAMERA
+# ==================================================
+
+def ve_qr_len_frame(frame, codes):
+    """Ve khung va noi dung QR/Barcode len frame."""
+    for code in codes:
+        try:
+            text = code.data.decode("utf-8", errors="ignore").strip()
+            hop_le = "HAT GIONG" in text or "GAO" in text
+            mau = (0, 255, 0) if hop_le else (0, 0, 255)
+
+            pts = code.polygon
+            if len(pts) >= 3:
+                diem = np.array(
+                    [[int(p.x), int(p.y)] for p in pts], dtype=np.int32
+                ).reshape((-1, 1, 2))
+                cv2.polylines(frame, [diem], True, mau, 3)
+            else:
+                r = code.rect
+                cv2.rectangle(
+                    frame,
+                    (int(r.left), int(r.top)),
+                    (int(r.left + r.width), int(r.top + r.height)),
+                    mau, 3
+                )
+
+            r = code.rect
+            nhan = f"{code.type}: {text}"
+            y_text = int(r.top - 10 if r.top > 25 else r.top + r.height + 25)
+            cv2.putText(
+                frame, nhan, (int(r.left), y_text),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, mau, 2, cv2.LINE_AA
+            )
+        except Exception as e:
+            print("Loi ve khung QR:", e)
+    return frame
 
 
 # ==================================================
@@ -519,7 +745,61 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.camera_update)
         self.timer.start(30)
 
+        self.pos_timer = QTimer(self)
+        self.pos_timer.timeout.connect(self.cap_nhat_vi_tri)
+        self.pos_timer.start(400)
+
         self.update_boxes()
+
+    # --------------------------------------------------
+    # VI TRI HIEN TAI / CHUAN BI MAY
+    # --------------------------------------------------
+
+    def cap_nhat_vi_tri(self):
+        if self.qr_lock:
+            return
+        doc_trang_thai()
+        if VI_TRI["x"] is not None:
+            k = VI_TRI["loai"]
+            self.x_label.setText(f"X ({k}): {VI_TRI['x']:.1f} mm")
+            self.y_label.setText(f"Y ({k}): {VI_TRI['y']:.1f} mm")
+            self.z_label.setText(f"Z ({k}): {VI_TRI['z']:.1f} mm")
+
+    def chuan_bi_may(self):
+        """Go Hold/Alarm nhe truoc khi xuat hang. Tra ve False neu may chua san sang."""
+        if CHE_DO_MO_PHONG:
+            return True
+
+        if fluidnc is None or not fluidnc.is_open:
+            self.status.setText("CHUA KET NOI FLUIDNC")
+            return False
+
+        state = doc_trang_thai()
+        if state is None:
+            self.status.setText("KHONG DOC DUOC TRANG THAI FLUIDNC")
+            return False
+
+        if state.startswith("Hold") or state == "Alarm":
+            self.status.setText("DANG PHUC HOI MAY...")
+            QApplication.processEvents()
+            if not phuc_hoi_may():
+                self.status.setText("FLUIDNC DANG ALARM - BAM HOME TRUOC")
+                return False
+
+        return True
+
+    # --------------------------------------------------
+    # RESET TRANG THAI CHU KY
+    # --------------------------------------------------
+
+    def reset_chu_ky(self):
+        self.cam_bien_da_phat_hien = False
+        self.bang_tai_da_dung = False
+        self.cho_cam_bien_nha = False
+        self.qr_candidate = None
+        self.qr_stable_count = 0
+        self.loi_chu_ky = False
+        self.qr_lock = False
 
     # --------------------------------------------------
     # CAMERA VA QUET QR
@@ -529,6 +809,12 @@ class MainWindow(QMainWindow):
         ret, frame = self.camera.read()
         if not ret:
             return
+
+        # Quet QR/Barcode tren moi frame (de ve khung + xu ly logic)
+        codes = decode(
+            frame,
+            symbols=[ZBarSymbol.QRCODE, ZBarSymbol.CODE128],
+        )
 
         if self.running and not CHE_DO_MO_PHONG:
             trang_thai_cam_bien = doc_cam_bien_quang()
@@ -558,10 +844,6 @@ class MainWindow(QMainWindow):
                     and not self.cho_cam_bien_nha
                     and not self.loi_chu_ky
                 ):
-                    codes = decode(
-                        frame,
-                        symbols=[ZBarSymbol.QRCODE, ZBarSymbol.CODE128],
-                    )
                     ma_hang = set()
 
                     for code in codes:
@@ -591,7 +873,6 @@ class MainWindow(QMainWindow):
                             self.cho_cam_bien_nha = True
                             print("NHAN QR:", qr_hang)
                             self.status.setText(f"DANG XU LY: {qr_hang}")
-                            QApplication.processEvents()
 
                             try:
                                 thanh_cong = nhan_hang(qr_hang)
@@ -604,7 +885,7 @@ class MainWindow(QMainWindow):
                                     self.cho_cam_bien_nha = False
                                     self.loi_chu_ky = True
                                     self.status.setText(
-                                        "KHONG CAT DUOC HANG - BANG TAI GIU DUNG"
+                                        "KHONG CAT DUOC HANG - LAY HANG RA DE TU PHUC HOI"
                                     )
                             except Exception as e:
                                 self.cho_cam_bien_nha = False
@@ -622,12 +903,9 @@ class MainWindow(QMainWindow):
                 and self.cam_bien_da_phat_hien
             ):
                 if self.cho_cam_bien_nha and not self.loi_chu_ky:
+                    # Chu ky binh thuong: da cat xong, hang roi khoi cam bien
                     if dieu_khien_bang_tai(True):
-                        self.cam_bien_da_phat_hien = False
-                        self.bang_tai_da_dung = False
-                        self.cho_cam_bien_nha = False
-                        self.qr_candidate = None
-                        self.qr_stable_count = 0
+                        self.reset_chu_ky()
                         self.status.setText(
                             "CAM BIEN DA NHA - BANG TAI CHAY LAI"
                         )
@@ -637,13 +915,26 @@ class MainWindow(QMainWindow):
                         self.status.setText(
                             "LOI: ARDUINO CHUA XAC NHAN START"
                         )
-                elif not self.loi_chu_ky:
-                    self.loi_chu_ky = True
-                    dieu_khien_bang_tai(False)
-                    self.running = False
+                else:
+                    # Chu ky loi / cam bien nha som: TU PHUC HOI, khong can HOME
                     self.status.setText(
-                        "CANH BAO: CAM BIEN NHA TRUOC KHI CAT HANG - DA DUNG"
+                        "HANG DA RA KHOI CAM BIEN - DANG TU PHUC HOI"
                     )
+                    QApplication.processEvents()
+
+                    if phuc_hoi_may() and dieu_khien_bang_tai(True):
+                        self.reset_chu_ky()
+                        self.status.setText(
+                            "DA PHUC HOI - BANG TAI CHAY LAI, CHO HANG MOI"
+                        )
+                    else:
+                        self.running = False
+                        self.status.setText(
+                            "TU PHUC HOI THAT BAI - BAM HOME"
+                        )
+
+        # Ve khung QR len hinh (truoc khi doi sang RGB)
+        ve_qr_len_frame(frame, codes)
 
         # Hien thi camera
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -700,6 +991,9 @@ class MainWindow(QMainWindow):
             self.status.setText("Chua chon o!")
             return
 
+        if not self.chuan_bi_may():
+            return
+
         ten_o = self.danh_sach_xuat[-1]
         self.status.setText(f"DANG XUAT {ten_o}")
         QApplication.processEvents()
@@ -720,6 +1014,8 @@ class MainWindow(QMainWindow):
             return
 
         self.running = False
+        if not self.chuan_bi_may():
+            return
         danh_sach = self.danh_sach_xuat.copy()
         self.status.setText("DANG XUAT: " + " -> ".join(danh_sach))
         QApplication.processEvents()
@@ -741,6 +1037,14 @@ class MainWindow(QMainWindow):
 
     def export(self):
         self.running = False
+
+        if not any(o["trang_thai"] for o in KHO.values()):
+            self.status.setText("KHO TRONG - KHONG CO HANG DE XUAT")
+            return
+
+        if not self.chuan_bi_may():
+            return
+
         self.status.setText("DANG XUAT HANG")
         QApplication.processEvents()
 
@@ -768,19 +1072,21 @@ class MainWindow(QMainWindow):
     # --------------------------------------------------
 
     def home(self):
+        """Chi ve HOME va dung yen. Co hang moi nhan_hang() se tu ra tram gap."""
         self.running = False
-        self.status.setText("DANG HOME (CO THE MAT VAI CHUC GIAY)")
+        self.reset_chu_ky()
+        self.status.setText("DANG HOME")
         QApplication.processEvents()
 
         if home():
-            if send_gcode(SERVO_MO) and tram_gap():
-                self.status.setText("SAN SANG")
-            else:
+            if send_gcode(SERVO_MO):
                 self.status.setText(
-                    "HOME XONG NHUNG DI CHUYEN VE TRAM GAP LOI"
+                    "DA HOME - BAM START, CO HANG MOI CHAY RA TRAM GAP"
                 )
+            else:
+                self.status.setText("HOME XONG NHUNG MO SERVO LOI")
         else:
-            self.status.setText("HOME THAT BAI - XEM CONSOLE")
+            self.status.setText("HOME THAT BAI")
 
     def start(self):
         if CHE_DO_MO_PHONG:
@@ -797,32 +1103,25 @@ class MainWindow(QMainWindow):
             self.status.setText("CHUA KET NOI ARDUINO")
             return
 
-        # Kiem tra FluidNC khong bi Alarm (chua home)
         state = doc_trang_thai()
-        if state == "Alarm":
-            self.status.setText("FLUIDNC DANG ALARM - BAM HOME TRUOC")
-            return
-        if state is None:
-            self.status.setText("KHONG DOC DUOC TRANG THAI FLUIDNC")
-            return
+        if state is not None and (state.startswith("Hold") or state == "Alarm"):
+            self.status.setText("DANG PHUC HOI MAY...")
+            QApplication.processEvents()
+            if not phuc_hoi_may():
+                self.status.setText("FLUIDNC DANG ALARM - BAM HOME TRUOC")
+                return
 
         if not dieu_khien_bang_tai(True):
             self.status.setText("ARDUINO KHONG XAC NHAN START")
             return
 
-        self.cam_bien_da_phat_hien = False
-        self.bang_tai_da_dung = False
-        self.cho_cam_bien_nha = False
-        self.qr_candidate = None
-        self.qr_stable_count = 0
-        self.loi_chu_ky = False
+        self.reset_chu_ky()
         self.running = True
         self.status.setText("DANG CHAY - CHO CAM BIEN")
         print("START")
 
     def stop(self):
         self.running = False
-        self.qr_lock = False
         ok_arduino = dieu_khien_bang_tai(False)
 
         if (
@@ -836,12 +1135,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print("Loi gui Feed Hold:", e)
 
-        self.cam_bien_da_phat_hien = False
-        self.bang_tai_da_dung = False
-        self.cho_cam_bien_nha = False
-        self.qr_candidate = None
-        self.qr_stable_count = 0
-        self.loi_chu_ky = False
+        self.reset_chu_ky()
 
         self.status.setText(
             "DA DUNG" if ok_arduino
@@ -858,6 +1152,8 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "timer"):
             self.timer.stop()
+        if hasattr(self, "pos_timer"):
+            self.pos_timer.stop()
 
         if hasattr(self, "camera") and self.camera:
             self.camera.release()
@@ -881,6 +1177,7 @@ class MainWindow(QMainWindow):
 # ==================================================
 
 if __name__ == "__main__":
+    tao_file_excel()
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
